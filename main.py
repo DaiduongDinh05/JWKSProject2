@@ -34,6 +34,20 @@ expired_pem = expired_key.private_bytes(
 
 numbers = private_key.private_numbers()
 
+good_token_payload = {
+    "user": "username",
+    "exp": int(datetime.datetime.utcnow().timestamp()) + 50000
+}
+expired_token_payload = {
+    "user": "username",
+    "exp": int(datetime.datetime.utcnow().timestamp()) - 50000
+}
+connection = get_db_connection()
+cursor = connection.cursor()
+cursor.execute("INSERT INTO keys (key,exp) VALUES (?, ?)", (pem, good_token_payload["exp"]))
+cursor.execute("INSERT INTO keys (key,exp) VALUES (?, ?)", (expired_pem, expired_token_payload["exp"]))
+connection.commit()
+connection.close()
 
 def int_to_base64(value):
     """Convert an integer to a Base64URL-encoded string"""
@@ -71,6 +85,15 @@ class MyServer(BaseHTTPRequestHandler):
         parsed_path = urlparse(self.path)
         params = parse_qs(parsed_path.query)
         if parsed_path.path == "/auth":
+            generated_private_key = rsa.generate_private_key(
+                public_exponent=65537,
+                key_size=2048,
+            )
+            generated_pem = generated_private_key.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.TraditionalOpenSSL,
+                encryption_algorithm=serialization.NoEncryption()
+            )
             headers = {
                 "kid": "goodKID"
             }
@@ -83,11 +106,10 @@ class MyServer(BaseHTTPRequestHandler):
                 token_payload["exp"] = int(datetime.datetime.utcnow().timestamp()) - 50000
             connection = get_db_connection()
             cursor = connection.cursor()
-            cursor.execute("INSERT INTO keys (key,exp) VALUES (?, ?)", (pem, token_payload["exp"]))
+            cursor.execute("INSERT INTO keys (key,exp) VALUES (?, ?)", (generated_pem, token_payload["exp"]))
             connection.commit()
             connection.close()
-            print(int(datetime.datetime.utcnow().timestamp()))
-            encoded_jwt = jwt.encode(token_payload, pem, algorithm="RS256", headers=headers)
+            encoded_jwt = jwt.encode(token_payload, generated_pem, algorithm="RS256", headers=headers)
             self.send_response(200)
             self.end_headers()
             self.wfile.write(bytes(encoded_jwt, "utf-8"))
@@ -135,5 +157,4 @@ if __name__ == "__main__":
         webServer.serve_forever()
     except KeyboardInterrupt:
         pass
-
     webServer.server_close()
